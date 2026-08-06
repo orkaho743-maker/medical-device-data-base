@@ -1,0 +1,147 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+function loadScreeningScript() {
+  const scriptPath = path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'script.js');
+  const source = fs.readFileSync(scriptPath, 'utf8');
+
+  const elements = new Map();
+  const createElement = () => ({
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    disabled: false,
+    classList: { add() {}, remove() {} },
+    addEventListener() {},
+    setAttribute() {},
+    getAttribute() { return null; },
+    querySelectorAll() { return []; },
+    appendChild() {},
+    removeChild() {},
+    click() {},
+    matches() { return false; },
+    closest() { return null; },
+    focus() {}
+  });
+
+  const formElement = createElement();
+  formElement.addEventListener = () => {};
+  const commonElement = createElement();
+  commonElement.addEventListener = () => {};
+
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) {
+        elements.set(id, createElement());
+      }
+      return elements.get(id);
+    },
+    createElement(tagName) {
+      if (tagName === 'div') {
+        return createElement();
+      }
+      return createElement();
+    },
+    body: createElement(),
+    addEventListener() {}
+  };
+
+  const context = {
+    console,
+    document,
+    window: {},
+    setTimeout,
+    clearTimeout,
+    URL,
+    Blob,
+    FileReader: class {},
+    navigator: { userAgent: 'node' },
+    fetch: async () => ({ ok: true, json: async () => ({ records: [] }) })
+  };
+  context.window = context;
+  context.globalThis = context;
+  context.document.defaultView = context.window;
+
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: scriptPath });
+  return context;
+}
+
+test('extractPossibleDescription prefers product labels from alert content', () => {
+  const context = loadScreeningScript();
+
+  const sampleText = [
+    'Affected product:',
+    'CyberKnife Treatment Delivery Systems',
+    'Manufacturer: Accuray',
+    'Model: G4'
+  ].join('\n');
+
+  const description = context.extractPossibleDescription(sampleText, 'G4', 'Accuray');
+
+  assert.equal(description, 'CyberKnife Treatment Delivery Systems');
+});
+
+test('extractPossibleDescription handles product device name labels from PDF content', () => {
+  const context = loadScreeningScript();
+
+  const sampleText = [
+    'Product/Device name: Balt Extrusion HYBRID',
+    'Manufacturer: Balt Extrusion',
+    'Model: Hybrid 1'
+  ].join('\n');
+
+  const description = context.extractPossibleDescription(sampleText, 'Hybrid 1', 'Balt Extrusion');
+
+  assert.equal(description, 'Balt Extrusion HYBRID');
+});
+
+test('extractAlertCriteria infers CyberKnife manufacturer and model from alert text', () => {
+  const context = loadScreeningScript();
+  const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
+  const cyberKnifeRecord = (payload.records || []).find((record) => String(record.model || '').toLowerCase().includes('cyberknife'));
+  const mappedRegistry = (payload.records || []).map((record, index) => context.toDeviceRecord(record, index));
+  vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
+
+  const criteria = context.extractAlertCriteria({
+    alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Accuray CyberKnife',
+    alertHtml: '',
+    link: 'https://mhra-gov.filecamp.com/s/d/chWFJPPib8KWWNZj',
+    serialPart: ''
+  });
+
+  assert.match(criteria.make.toLowerCase(), /accuray/i);
+  assert.match(criteria.model.toLowerCase(), /cyberknife/i);
+
+  const result = context.screenAlert(criteria);
+  const cyberKnifeMatch = result.matches.find((match) => match.id === cyberKnifeRecord.no);
+
+  assert.ok(cyberKnifeMatch, 'expected a CyberKnife match to be returned');
+  assert.match(cyberKnifeMatch.manufacturer.toLowerCase(), /accuray/i);
+});
+
+test('screenAlert returns no matches for non-MDD MHRA/Health Canada alerts', () => {
+  const context = loadScreeningScript();
+  const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
+  const mappedRegistry = (payload.records || []).map((record, index) => context.toDeviceRecord(record, index));
+  vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
+
+  const alerts = [
+    'Health Canada: Stryker GmbH Hoffmann II Carbon Connecting Rod',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Doccla Passive Monitoring section of the CSCR (V2.15)',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): GE Healthcare Carestation 600 and 750 Series',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Intersurgical One-piece Guedel airway',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Medtronic Sphere-9 catheter',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Olympus High Flow Insufflation Unit',
+    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Symbios Orthopedie CoCr Modular Neck assembled with SPS Modular Stem'
+  ];
+
+  for (const alertText of alerts) {
+    const criteria = context.extractAlertCriteria({ alertText, alertHtml: '', link: '', serialPart: '' });
+    const result = context.screenAlert(criteria);
+    assert.equal(result.matches.length, 0, `Expected no matches for alert: ${alertText}`);
+  }
+});
