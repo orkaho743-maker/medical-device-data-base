@@ -375,15 +375,18 @@ function extractAlertCriteria(formData) {
   const serialNumber = String(formData.serialPart || '').trim() || extractReportField(/serial(?: number)?[:\s]*([^\n\.]+)/i, alertSource);
   const rawModel = extractReportField(/model[:\s]*([^\n\.]+)/i, alertSource) || extractReportField(/(?:^|\s)(cyberknife|precision|s7|treatment delivery system|linear accelerator)(?:$|\s)/i, alertSource);
   const rawMake = extractPossibleMake(alertSource) || extractReportField(/manufacturer[:\s]*([^\n\.]+)/i, alertSource) || extractReportField(/(?:^|\s)(accuray)(?:$|\s)/i, alertSource);
-  const rawDescription = extractPossibleDescription(alertSource, rawModel, rawMake) || extractReportField(/(?:affected equipment|affected equipment\/system|affected system|equipment\/system|equipment|product|item)[\s:\-]*([^\n\.]+)/i, alertSource) || (rawModel ? rawModel : '');
-  const description = rawDescription && !rawModel && looksLikeAlertHeadline(alertSource) && rawDescription.trim() === alertSource.trim()
+  const registryInference = inferRegistryMatchForAlertText(alertSource, rawMake, rawModel);
+  const resolvedMake = rawMake || registryInference.make;
+  const resolvedModel = rawModel || registryInference.model;
+  const rawDescription = extractPossibleDescription(alertSource, resolvedModel, resolvedMake) || registryInference.description || extractReportField(/(?:affected equipment|affected equipment\/system|affected system|equipment\/system|equipment|product|item)[\s:\-]*([^\n\.]+)/i, alertSource) || (resolvedModel ? resolvedModel : '');
+  const description = rawDescription && !resolvedModel && looksLikeAlertHeadline(alertSource) && rawDescription.trim() === alertSource.trim()
     ? ''
     : rawDescription;
 
   return {
     serialNumber: serialNumber || '',
-    make: rawMake || '',
-    model: rawModel || '',
+    make: resolvedMake || '',
+    model: resolvedModel || '',
     description: description || '',
     alertText: alertSource || ''
   };
@@ -758,7 +761,8 @@ function extractPossibleMake(text) {
     }
   }
 
-  return '';
+  const registryInference = inferRegistryMatchForAlertText(text);
+  return registryInference.make || '';
 }
 
 function extractPossibleDescriptionFromLabels(text) {
@@ -801,7 +805,87 @@ function extractPossibleDescriptionFromLabels(text) {
   return '';
 }
 
+function inferRegistryMatchForAlertText(text, preferredMake = '', preferredModel = '') {
+  if (!Array.isArray(deviceRegistry) || !deviceRegistry.length) {
+    return { make: '', model: '', description: '' };
+  }
+
+  const normalizedAlertText = String(text || '').trim();
+  if (!normalizedAlertText) {
+    return { make: '', model: '', description: '' };
+  }
+
+  const alertTokens = new Set(getMeaningfulTokens(normalizedAlertText));
+  const productSignalTokens = new Set(['hybrid', 'omni', 'tract', 'retractor', 'retractors', 'guide', 'wire', 'wires', 'catheter', 'catheters', 'stent', 'balloon', 'valve', 'ventilator', 'pump', 'drill', 'blade', 'implant', 'filter', 'cannula', 'system']);
+  const hasProductSignal = [...alertTokens].some((token) => productSignalTokens.has(token) || /balt|extrusion|integra|lifesciences/i.test(token));
+  if (!hasProductSignal) {
+    return { make: '', model: '', description: '' };
+  }
+
+  let bestMatch = null;
+
+  for (const device of deviceRegistry) {
+    const manufacturer = String(device.manufacturer || '');
+    const model = String(device.model || '');
+    const description = String(device.description || '');
+    const combinedText = [manufacturer, model, description].filter(Boolean).join(' ');
+    const alertTokens = new Set(getMeaningfulTokens(normalizedAlertText));
+    const candidateTokens = [...new Set(getMeaningfulTokens(combinedText))];
+    const tokenOverlap = candidateTokens.filter((token) => alertTokens.has(token)).length;
+    const manufacturerPresent = Boolean(manufacturer && (fieldContainsPhrase(normalizedAlertText, manufacturer) || sameNormalizedText(normalizedAlertText, manufacturer)));
+    const modelPresent = Boolean(model && (fieldContainsPhrase(normalizedAlertText, model) || sameNormalizedText(normalizedAlertText, model)));
+    const descriptionPresent = Boolean(description && (fieldContainsPhrase(normalizedAlertText, description) || sameNormalizedText(normalizedAlertText, description)));
+
+    let score = 0;
+    if (preferredMake && sameNormalizedText(preferredMake, manufacturer)) {
+      score += 4;
+    }
+    if (preferredModel && sameNormalizedText(preferredModel, model)) {
+      score += 4;
+    }
+    if (manufacturerPresent) {
+      score += 6;
+    }
+    if (modelPresent) {
+      score += 6;
+    }
+    if (descriptionPresent) {
+      score += 3;
+    }
+    if (tokenOverlap >= 2) {
+      score += tokenOverlap * 2;
+    } else if (manufacturerPresent && tokenOverlap >= 1) {
+      score += 2;
+    }
+    if (overlapScore(normalizedAlertText, combinedText) >= 0.12) {
+      score += 2;
+    }
+
+    const directProductNameMatch = Boolean(modelPresent || descriptionPresent || (tokenOverlap >= 3 && (manufacturerPresent || modelPresent || descriptionPresent)));
+    const hasStrongEvidence = directProductNameMatch && (score >= 12 || (manufacturerPresent && (tokenOverlap >= 2 || modelPresent || descriptionPresent)));
+
+    if (hasStrongEvidence && score > (bestMatch?.score || 0)) {
+      bestMatch = { device, score };
+    }
+  }
+
+  if (!bestMatch || bestMatch.score < 10) {
+    return { make: '', model: '', description: '' };
+  }
+
+  return {
+    make: String(bestMatch.device.manufacturer || ''),
+    model: String(bestMatch.device.model || ''),
+    description: String(bestMatch.device.description || '')
+  };
+}
+
 function inferDescriptionFromRegistry(make, model, alertText) {
+  const inferredEvidence = inferRegistryMatchForAlertText(alertText, make, model);
+  if (inferredEvidence.description) {
+    return inferredEvidence.description;
+  }
+
   if (!Array.isArray(deviceRegistry) || !deviceRegistry.length) {
     return '';
   }

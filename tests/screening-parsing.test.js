@@ -123,6 +123,48 @@ test('extractAlertCriteria infers CyberKnife manufacturer and model from alert t
   assert.match(cyberKnifeMatch.manufacturer.toLowerCase(), /accuray/i);
 });
 
+test('extractAlertCriteria detects Balt Extrusion HYBRID and returns a registry match', () => {
+  const context = loadScreeningScript();
+  const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
+  const mappedRegistry = (payload.records || []).map((record, index) => context.toDeviceRecord(record, index));
+  vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
+
+  const criteria = context.extractAlertCriteria({
+    alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Balt Extrusion HYBRID',
+    alertHtml: '',
+    link: 'https://mhra-gov.filecamp.com/s/d/vexiwH1Duw6cirFM',
+    serialPart: ''
+  });
+
+  assert.match(criteria.make.toLowerCase(), /balt extrusion/i);
+  assert.match(criteria.model.toLowerCase(), /hybrid/i);
+
+  const result = context.screenAlert(criteria);
+  assert.ok(result.matches.length > 0, 'expected Balt Extrusion HYBRID to match at least one database record');
+  assert.ok(result.matches.some((match) => String(match.manufacturer || '').toLowerCase().includes('balt')));
+});
+
+test('extractAlertCriteria detects Integra Omni-Tract retractor alerts and returns a registry match', () => {
+  const context = loadScreeningScript();
+  const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
+  const mappedRegistry = (payload.records || []).map((record, index) => context.toDeviceRecord(record, index));
+  vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
+
+  const criteria = context.extractAlertCriteria({
+    alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Integra LifeSciences IntegraOmni-Tract Table Mounted Retractor System',
+    alertHtml: '',
+    link: 'https://mhra-gov.filecamp.com/s/d/ku1NzK8ZuHySAEFk',
+    serialPart: ''
+  });
+
+  assert.match(criteria.make.toLowerCase(), /integra/i);
+  assert.match(criteria.model.toLowerCase(), /omni/i);
+
+  const result = context.screenAlert(criteria);
+  assert.ok(result.matches.length > 0, 'expected Integra Omni-Tract to match at least one database record');
+  assert.ok(result.matches.some((match) => String(match.description || '').toLowerCase().includes('retractor')));
+});
+
 test('screenAlert returns no matches for non-MDD MHRA/Health Canada alerts', () => {
   const context = loadScreeningScript();
   const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
