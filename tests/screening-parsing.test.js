@@ -165,6 +165,19 @@ test('extractAlertCriteria detects Integra Omni-Tract retractor alerts and retur
   assert.ok(result.matches.some((match) => String(match.description || '').toLowerCase().includes('retractor')));
 });
 
+test('findKnownAlertMatches returns explicit matches for the reported MHRA alerts', () => {
+  const context = loadScreeningScript();
+  const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
+  const mappedRegistry = (payload.records || []).map((record, index) => context.toDeviceRecord(record, index));
+  vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
+
+  const baltMatches = context.findKnownAlertMatches('UK Medicines and Healthcare products Regulatory Agency (MHRA): Balt Extrusion HYBRID');
+  const integraMatches = context.findKnownAlertMatches('UK Medicines and Healthcare products Regulatory Agency (MHRA): Integra LifeSciences IntegraOmni-Tract Table Mounted Retractor System');
+
+  assert.ok(baltMatches.some((match) => String(match.id) === '110407' || String(match.id) === '210339'));
+  assert.ok(integraMatches.some((match) => String(match.id) === '253751'));
+});
+
 test('screenAlert returns no matches for non-MDD MHRA/Health Canada alerts', () => {
   const context = loadScreeningScript();
   const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
