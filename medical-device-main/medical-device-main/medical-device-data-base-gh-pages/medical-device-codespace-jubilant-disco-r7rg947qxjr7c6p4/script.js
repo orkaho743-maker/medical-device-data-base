@@ -15,6 +15,10 @@ if (!form || !resultSummary || !resultTable || !databaseList || !copyButton || !
   throw new Error('The screening page is missing required UI elements.');
 }
 
+if (document.body) {
+  document.body.classList.remove('print-report');
+}
+
 function buildFallbackRegistry() {
   return [
     {

@@ -9,6 +9,10 @@
   --border: rgba(255, 255, 255, 0.12);
 }
 
+html {
+  background-color: #07111f;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -16,7 +20,9 @@
 body {
   margin: 0;
   font-family: 'Inter', sans-serif;
-  background: linear-gradient(135deg, #07111f 0%, #132b46 100%);
+  background:
+    radial-gradient(circle at top left, rgba(76, 201, 240, 0.16), transparent 38%),
+    linear-gradient(135deg, #07111f 0%, #132b46 100%);
   color: var(--text);
   min-height: 100vh;
   line-height: 1.5;
