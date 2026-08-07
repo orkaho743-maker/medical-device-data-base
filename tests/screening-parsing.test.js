@@ -123,6 +123,22 @@ test('extractAlertCriteria infers CyberKnife manufacturer and model from alert t
   assert.match(cyberKnifeMatch.manufacturer.toLowerCase(), /accuray/i);
 });
 
+test('splitAlertEntries handles numbered alert lists', () => {
+  const context = loadScreeningScript();
+  const combinedText = [
+    '1. Health Canada: Stryker GmbH Hoffmann II Carbon Connecting Rod',
+    '2. UK Medicines and Healthcare products Regulatory Agency (MHRA): Accuray CyberKnife',
+    '3. Australia TGA: Olympus UHI-4 High Flow Insufflation Unit'
+  ].join('\n');
+
+  const entries = context.splitAlertEntries(combinedText);
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0], 'Health Canada: Stryker GmbH Hoffmann II Carbon Connecting Rod');
+  assert.equal(entries[1], 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Accuray CyberKnife');
+  assert.equal(entries[2], 'Australia TGA: Olympus UHI-4 High Flow Insufflation Unit');
+});
+
+test('screenAlert returns matches for the supplied recall examples', () => {
 test('extractAlertCriteria detects Balt Extrusion HYBRID and returns a registry match', () => {
   const context = loadScreeningScript();
   const payload = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'medical-device-main', 'medical-device-main', 'medical-device-data-base-gh-pages', 'devices.json'), 'utf8'));
@@ -185,18 +201,73 @@ test('screenAlert returns no matches for non-MDD MHRA/Health Canada alerts', () 
   vm.runInContext(`deviceRegistry = ${JSON.stringify(mappedRegistry)};`, context);
 
   const alerts = [
-    'Health Canada: Stryker GmbH Hoffmann II Carbon Connecting Rod',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Doccla Passive Monitoring section of the CSCR (V2.15)',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): GE Healthcare Carestation 600 and 750 Series',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Intersurgical One-piece Guedel airway',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Medtronic Sphere-9 catheter',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Olympus High Flow Insufflation Unit',
-    'UK Medicines and Healthcare products Regulatory Agency (MHRA): Symbios Orthopedie CoCr Modular Neck assembled with SPS Modular Stem'
+    {
+      alertText: 'Health Canada: Stryker GmbH Hoffmann II Carbon Connecting Rod',
+      expectedTokens: ['stryker', 'hoffmann']
+    },
+    {
+      alertText: 'Health Canada: Zimmer Surgical, Inc. Also Trading As Relign Corporation A.T.S 4000 TS Tourniquet Systems Single and Dual Hose with CPC Connectors',
+      expectedTokens: ['zimmer', 'tourniquet']
+    },
+    {
+      alertText: 'Health Canada: Ge Medical Systems, LLC Optima XR240amx X-Ray System',
+      expectedTokens: ['optima', 'xr240amx']
+    },
+    {
+      alertText: 'Australia TGA: Werfen HemosIL AcuStar ADAMTS13 Activity',
+      expectedTokens: ['hemosil', 'acustar']
+    },
+    {
+      alertText: 'Australia TGA: Olympus UHI-4 High Flow Insufflation Unit',
+      expectedTokens: ['olympus', 'insufflation', 'uhi']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Accuray CyberKnife',
+      expectedTokens: ['accuray', 'cyberknife']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Balt Extrusion HYBRID',
+      expectedTokens: ['balt', 'hybrid']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): GE Healthcare Carestation 600 and 750 Series',
+      expectedTokens: ['carestation', 'ge']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Intersurgical One-piece Guedel airway',
+      expectedTokens: ['intersurgical', 'guedel']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Medtronic Sphere-9 catheter',
+      expectedTokens: ['medtronic', 'sphere']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Olympus High Flow Insufflation Unit',
+      expectedTokens: ['olympus', 'insufflation', 'uhi']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Philips BiPAP A30(Hybrid)/A40/A40Pro Ventilator(Res.,Inc.)',
+      expectedTokens: ['bipap', 'philips']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Siemens Healthcare Atellica CI Analyzer, Atellica IM Analyzer, ADVIA Centaur XP System, ADVIA Centaur XPT System, ADVIA Centaur CP System',
+      expectedTokens: ['atellica', 'siemens']
+    },
+    {
+      alertText: 'UK Medicines and Healthcare products Regulatory Agency (MHRA): Symbios Orthopedie CoCr Modular Neck assembled with SPS Modular Stem',
+      expectedTokens: ['modular', 'neck']
+    }
   ];
 
-  for (const alertText of alerts) {
+  for (const { alertText, expectedTokens } of alerts) {
     const criteria = context.extractAlertCriteria({ alertText, alertHtml: '', link: '', serialPart: '' });
     const result = context.screenAlert(criteria);
-    assert.equal(result.matches.length, 0, `Expected no matches for alert: ${alertText}`);
+    assert.ok(result.matches.length > 0, `Expected at least one match for alert: ${alertText}`);
+
+    const joined = result.matches
+      .map((match) => `${match.description} ${match.manufacturer} ${match.model}`.toLowerCase())
+      .join(' ');
+    const matchedAnyToken = expectedTokens.some((token) => joined.includes(token));
+    assert.ok(matchedAnyToken, `Expected one of ${expectedTokens.join(', ')} in the matched results for ${alertText}`);
   }
 });
