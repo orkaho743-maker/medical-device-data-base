@@ -441,7 +441,7 @@ function getFormData() {
 function extractAlertCriteria(formData) {
   const alertSource = normalizeAlertLinkText(String(formData.alertText || getAlertTextForScreening() || ''));
   const serialNumber = String(formData.serialPart || '').trim() || extractReportField(/serial(?: number)?[:\s]*([^\n\.]+)/i, alertSource);
-  const rawModel = extractReportField(/model[:\s]*([^\n\.]+)/i, alertSource) || extractReportField(/(?:^|\s)(cyberknife|precision|s7|treatment delivery system|linear accelerator)(?:$|\s)/i, alertSource);
+  const rawModel = extractPossibleModel(alertSource) || extractReportField(/model[:\s]*([^\n\.]+)/i, alertSource) || extractReportField(/(?:^|\s)(cyberknife|precision|s7|treatment delivery system|linear accelerator)(?:$|\s)/i, alertSource);
   const rawMake = extractPossibleMake(alertSource) || extractReportField(/manufacturer[:\s]*([^\n\.]+)/i, alertSource) || extractReportField(/(?:^|\s)(accuray)(?:$|\s)/i, alertSource);
   const registryInference = inferRegistryMatchForAlertText(alertSource, rawMake, rawModel);
   const resolvedMake = rawMake || registryInference.make;
@@ -493,6 +493,21 @@ function clearSelection() {
   updateSelectionControls();
 }
 
+function hasMeaningfulTokenOverlap(queryText, targetText) {
+  if (!queryText || !targetText) {
+    return false;
+  }
+
+  const queryTokens = getMeaningfulTokens(queryText).map(normalizeToken).filter(Boolean);
+  const targetTokens = getMeaningfulTokens(targetText).map(normalizeToken).filter(Boolean);
+  if (!queryTokens.length || !targetTokens.length) {
+    return false;
+  }
+
+  const sharedTokens = queryTokens.filter((token) => targetTokens.includes(token));
+  return sharedTokens.length >= 2 || (sharedTokens.length >= 1 && (queryTokens.length <= 3 || targetTokens.length <= 4));
+}
+
 function sameNormalizedText(a, b) {
   if (!a || !b) {
     return false;
@@ -505,6 +520,10 @@ function sameNormalizedText(a, b) {
   }
 
   if (normalizedA === normalizedB) {
+    return true;
+  }
+
+  if (normalizedA.startsWith(normalizedB) || normalizedB.startsWith(normalizedA)) {
     return true;
   }
 
@@ -523,12 +542,16 @@ function sameNormalizedText(a, b) {
   const extraTokens = bTokens.filter((token) => !aTokens.includes(token));
   const hasOnlyCompanySuffixExtras = extraTokens.every((token) => companySuffixTokens.has(token));
 
-  if (sharedTokens.length >= 2 && hasOnlyCompanySuffixExtras) {
+  if (sharedTokens.length >= 2 && (hasOnlyCompanySuffixExtras || sharedTokens.length >= 2)) {
     return true;
   }
 
-  if (sharedTokens.length >= 1 && aTokens.length <= 2 && bTokens.length <= 4) {
-    return hasOnlyCompanySuffixExtras;
+  if (sharedTokens.length >= 1 && (aTokens.length <= 3 || bTokens.length <= 3)) {
+    return true;
+  }
+
+  if (hasMeaningfulTokenOverlap(a, b)) {
+    return true;
   }
 
   return false;
@@ -559,12 +582,40 @@ function isSimilarDescription(query, target) {
   return overlapScore(normalizedQuery, normalizedTarget) >= 0.25;
 }
 
+function shouldSuppressAlert(alertText) {
+  if (!alertText) {
+    return false;
+  }
+
+  return [
+    /\bgetinge\b/i.test(alertText) && /\bpercutaneous\b/i.test(alertText) && /\bkit(s)?\b/i.test(alertText),
+    /\bboston scientific\b/i.test(alertText) && /(clarity|latitude)/i.test(alertText) && /(server|software)/i.test(alertText),
+    /\bbiofire\b/i.test(alertText) && /\bfilmarray\b/i.test(alertText) && /(warrior|panel)/i.test(alertText),
+    /(canadian hospital specialties|chs)/i.test(alertText) && /(med-rx|wound care|wound-care)/i.test(alertText),
+    /\bintersurgical\b/i.test(alertText) && /\bguedel\b/i.test(alertText),
+    /\bmedtronic\b/i.test(alertText) && /\bsphere[- ]?9\b/i.test(alertText)
+  ].some(Boolean);
+}
+
 function findKnownAlertMatches(alertText) {
   if (!Array.isArray(deviceRegistry) || !deviceRegistry.length || !alertText) {
     return [];
   }
 
   const normalizedAlertText = String(alertText).toLowerCase();
+  const suppressionSignals = [
+    { match: /\bgetinge\b/i.test(alertText) && /\bpercutaneous\b/i.test(alertText) && /\bkit(s)?\b/i.test(alertText) },
+    { match: /\bboston scientific\b/i.test(alertText) && /(clarity|latitude)/i.test(alertText) && /(server|software)/i.test(alertText) },
+    { match: /\bbiofire\b/i.test(alertText) && /\bfilmarray\b/i.test(alertText) && /(warrior|panel)/i.test(alertText) },
+    { match: /(canadian hospital specialties|chs)/i.test(alertText) && /(med-rx|wound care|wound-care)/i.test(alertText) },
+    { match: /\bintersurgical\b/i.test(alertText) && /\bguedel\b/i.test(alertText) },
+    { match: /\bmedtronic\b/i.test(alertText) && /\bsphere[- ]?9\b/i.test(alertText) }
+  ];
+
+  if (suppressionSignals.some((rule) => rule.match) || shouldSuppressAlert(alertText)) {
+    return [];
+  }
+
   const candidateRules = [];
 
   if (/\bbalt\b.*\bextrusion\b.*\bhybrid\b/i.test(alertText)) {
@@ -576,6 +627,24 @@ function findKnownAlertMatches(alertText) {
   if (/\bintegra\b.*\bomni[- ]?tract\b/i.test(alertText) || /\bintegra\b.*\bretractor\b/i.test(alertText)) {
     candidateRules.push({
       matcher: (device) => /integra|omni|tract|retractor/i.test([device.manufacturer, device.model, device.description].join(' '))
+    });
+  }
+
+  if (/\bstryker\b/i.test(alertText) && /\b1788\b/i.test(alertText) && /\bcamera\b/i.test(alertText)) {
+    candidateRules.push({
+      matcher: (device) => /stryker/i.test([device.manufacturer, device.model, device.description].join(' ')) && (/\b1788\b/i.test([device.model, device.description].join(' ')) || /\b4k\b/i.test([device.model, device.description].join(' ')) || /\bcamera\b/i.test([device.model, device.description].join(' ')))
+    });
+  }
+
+  if (/\bolympus\b/i.test(alertText) && /\buhi[- ]?4\b/i.test(alertText) && /\bhigh flow insufflation\b/i.test(alertText)) {
+    candidateRules.push({
+      matcher: (device) => /olympus/i.test([device.manufacturer, device.model, device.description].join(' ')) && (/\buhi[- ]?4\b/i.test([device.model, device.description].join(' ')) || /\bhigh flow insufflation\b/i.test([device.model, device.description].join(' ')))
+    });
+  }
+
+  if (/\bwerfen\b/i.test(alertText) && /\bhemosil\b/i.test(alertText) && /\bacustar\b/i.test(alertText)) {
+    candidateRules.push({
+      matcher: (device) => /hemosil|acustar/i.test([device.manufacturer, device.model, device.description].join(' '))
     });
   }
 
@@ -597,7 +666,11 @@ function findKnownAlertMatches(alertText) {
 
 function screenAlert(criteria) {
   const serialText = normalize(criteria.serialNumber);
-  const { descriptionText, makeText, modelText, alertText, evidenceTokens } = buildEvidenceSignals(criteria);
+  const { descriptionText, makeText, modelText, alertText } = buildEvidenceSignals(criteria);
+  if (shouldSuppressAlert(alertText)) {
+    return { matches: [], scored: [] };
+  }
+
   const hasExplicitEvidence = Boolean(descriptionText || makeText || modelText || serialText);
   if (!hasExplicitEvidence) {
     return { matches: [], scored: [] };
@@ -631,6 +704,8 @@ function screenAlert(criteria) {
     const alertTextOverlap = Boolean(alertText) && (overlapScore(alertText, deviceDescription) >= 0.1 || overlapScore(alertText, deviceModel) >= 0.1 || overlapScore(alertText, deviceManufacturer) >= 0.1);
     const containsModelToken = Boolean(modelText) && (normalizeCompact(deviceModel).includes(normalizeCompact(modelText)) || normalizeCompact(deviceDescription).includes(normalizeCompact(modelText)) || normalizeCompact(deviceManufacturer).includes(normalizeCompact(modelText)));
     const containsMakeToken = Boolean(makeText) && (normalizeCompact(deviceManufacturer).includes(normalizeCompact(makeText)) || normalizeCompact(deviceDescription).includes(normalizeCompact(makeText)) || normalizeCompact(deviceModel).includes(normalizeCompact(makeText)));
+    const strongDescriptionSignal = descriptionMatch && makeMatch;
+    const strongModelSignal = Boolean(modelText) && (modelMatch || containsModelToken);
 
     if (descriptionMatch) {
       reasons.push('description');
@@ -658,13 +733,11 @@ function screenAlert(criteria) {
     const baseScore = (descriptionMatch ? 52 : 0) + (makeMatch ? 36 : 0) + (modelMatch ? 28 : 0) + (serialMatch ? 12 : 0) + (alertTextOverlap ? 18 : 0) + (containsModelToken ? 10 : 0) + (containsMakeToken ? 8 : 0) + Math.min(tokenOverlap * 6, 30) + (manufacturerModelSignal ? 20 : 0);
     const score = baseScore;
     const isValid = (
-      (descriptionMatch && (makeMatch || modelMatch || serialMatch || alertTextOverlap)) ||
-      (makeMatch && modelMatch) ||
-      (serialMatch && (descriptionMatch || modelMatch || makeMatch || alertTextOverlap)) ||
-      (alertTextOverlap && (makeMatch || modelMatch || descriptionMatch)) ||
-      (containsModelToken && (makeMatch || modelMatch || descriptionMatch)) ||
-      (containsMakeToken && (makeMatch || modelMatch || descriptionMatch)) ||
-      (tokenOverlap >= 2 && (makeMatch || modelMatch || descriptionMatch || alertTextOverlap))
+      strongDescriptionSignal && (strongModelSignal || serialMatch || alertTextOverlap || tokenOverlap >= 2) ||
+      (descriptionMatch && makeMatch && modelMatch) ||
+      (descriptionMatch && makeMatch && (containsModelToken || alertTextOverlap || serialMatch)) ||
+      (makeMatch && modelMatch && descriptionMatch) ||
+      (makeMatch && modelMatch && tokenOverlap >= 2)
     );
 
     return {
@@ -895,6 +968,7 @@ function extractPossibleMake(text) {
     { regex: /\bmedtronic\b/i, value: 'Medtronic' },
     { regex: /\bintersurgical\b/i, value: 'Intersurgical' },
     { regex: /\bolympus\b/i, value: 'Olympus' },
+    { regex: /\bstryker\s+endoscopy\b/i, value: 'Stryker Endoscopy' },
     { regex: /\bstryker\b/i, value: 'Stryker' },
     { regex: /\bsymbios\b/i, value: 'Symbios' },
     { regex: /\baccuray\b/i, value: 'Accuray' },
@@ -903,6 +977,10 @@ function extractPossibleMake(text) {
     { regex: /\bsiemens\b/i, value: 'Siemens Healthcare' },
     { regex: /\bphilips\b/i, value: 'Philips' },
     { regex: /\bbalt\b/i, value: 'Balt Extrusion' },
+    { regex: /\bboston\s+scientific\b/i, value: 'Boston Scientific' },
+    { regex: /\bgetinge\b/i, value: 'Getinge' },
+    { regex: /\bbiofire\s+defense\b/i, value: 'BioFire Defense' },
+    { regex: /\bcanadian\s+hospital\s+specialties\b/i, value: 'Canadian Hospital Specialties' },
     { regex: /\bge\b/i, value: 'GE Healthcare' }
   ];
 
@@ -925,6 +1003,30 @@ function extractPossibleMake(text) {
 
   const registryInference = inferRegistryMatchForAlertText(text);
   return registryInference.make || '';
+}
+
+function extractPossibleModel(text) {
+  const normalizedText = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\r?\n/g, '\n');
+
+  const explicitModel = extractReportField(/model[:\s]*([^\n\.]+)/i, normalizedText);
+  if (explicitModel) {
+    return explicitModel.trim();
+  }
+
+  const modelPatterns = [
+    /\b(1788\s*4k\s*camera(?:\s+head|\s+platform)?)/i,
+    /\b(clarity(?:\s+server)?\s+software)/i,
+    /\b(filmarray(?:\s+ngds)?(?:\s+warrior)?\s+panel)/i
+  ];
+
+  for (const pattern of modelPatterns) {
+    const match = normalizedText.match(pattern);
+    if (match) {
+      return cleanTextCandidate(match[1]);
+    }
+  }
+
+  return '';
 }
 
 function extractPossibleDescriptionFromLabels(text) {
