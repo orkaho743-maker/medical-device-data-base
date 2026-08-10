@@ -582,6 +582,117 @@ function isSimilarDescription(query, target) {
   return overlapScore(normalizedQuery, normalizedTarget) >= 0.25;
 }
 
+function determineFactorAnalysis(issueText, alertText = '') {
+  const normalized = [issueText, alertText].filter(Boolean).join(' ').toLowerCase();
+  if (!normalized.trim()) {
+    return 'undetermined';
+  }
+
+  const humanPatterns = [
+    /\buser error\b/i,
+    /\buse error\b/i,
+    /\bmisuse\b/i,
+    /\bwrong input\b/i,
+    /\bincorrectly\b/i,
+    /\boperator\b/i,
+    /\bstaff\b/i,
+    /\bnurse\b/i,
+    /\bclinician\b/i,
+    /\btraining\b/i,
+    /\bcompetenc\w*\b/i,
+    /\bfatigue\b/i,
+    /\balarm fatigue\b/i,
+    /\binterface\b/i,
+    /\bdisplay\b/i,
+    /\bkeyboard\b/i,
+    /\bbutton\b/i,
+    /\bcontrol panel\b/i,
+    /\bmisconnect(ed)?\b/i,
+    /\bconfusing\b/i,
+    /\blabeling\b/i,
+    /\binstruction(s)?\b/i,
+    /\baccidentally\b/i
+  ];
+
+  const engineeringPatterns = [
+    /\bseal integrity\b/i,
+    /\bsterility breach\b/i,
+    /\bvisual seal\b/i,
+    /\bnonconformit(y|ies)\b/i,
+    /\brecall\b/i,
+    /\bdefect\b/i,
+    /\bfailure\b/i,
+    /\bmechanical\b/i,
+    /\belectrical\b/i,
+    /\bsoftware\b/i,
+    /\bfirmware\b/i,
+    /\bcybersecurity\b/i,
+    /\bnetwork vulnerability\b/i,
+    /\bbattery\b/i,
+    /\bcapacitor\b/i,
+    /\breliability\b/i,
+    /\bredundanc(y|ies)\b/i,
+    /\bcalibration\b/i,
+    /\bmaintainability\b/i,
+    /\bmodule\b/i,
+    /\bconnector\b/i,
+    /\bwire(s)?\b/i,
+    /\bcomponent\b/i,
+    /\bassembly\b/i,
+    /\bmanufactur(ing|ed)\b/i,
+    /\bdesign\b/i,
+    /\bstructural\b/i,
+    /\bgrounding\b/i,
+    /\binsulation\b/i,
+    /\bpower supply\b/i,
+    /\bcharger\b/i,
+    /\bcharging\b/i,
+    /\bcontroller\b/i,
+    /\bshort circuit\b/i,
+    /\boverheat(ing)?\b/i
+  ];
+
+  const environmentalFactors = [
+    { pattern: /\bEMI\b/i, label: 'EMI/EMC' },
+    { pattern: /\bEMC\b/i, label: 'EMI/EMC' },
+    { pattern: /\belectromagnetic\b/i, label: 'EMI/EMC' },
+    { pattern: /\bpower quality\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bvoltage spike(s)?\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bpower sag\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bblackout\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bUPS\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bgenerator\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bgrid\b/i, label: 'Power quality / grid stability' },
+    { pattern: /\bhumidity\b/i, label: 'Ambient conditions' },
+    { pattern: /\btemperature\b/i, label: 'Ambient conditions' },
+    { pattern: /\bpressure\b/i, label: 'Ambient conditions' },
+    { pattern: /\baltitude\b/i, label: 'Ambient conditions' },
+    { pattern: /\bcontamination\b/i, label: 'Biological / chemical contamination' },
+    { pattern: /\bchemical\b/i, label: 'Biological / chemical contamination' },
+    { pattern: /\bbodily fluids\b/i, label: 'Biological / chemical contamination' },
+    { pattern: /\bsterilizing agent\b/i, label: 'Biological / chemical contamination' },
+    { pattern: /\bcondensation\b/i, label: 'Ambient conditions' }
+  ];
+
+  const hasHuman = humanPatterns.some((pattern) => pattern.test(normalized));
+  const hasEngineering = engineeringPatterns.some((pattern) => pattern.test(normalized));
+  const matchedEnvironmental = environmentalFactors.find((entry) => entry.pattern.test(normalized));
+  const hasEnvironmental = Boolean(matchedEnvironmental);
+
+  const parts = [];
+  if (hasEngineering) {
+    parts.push('engineering factor');
+  }
+  if (hasEnvironmental) {
+    parts.push(`environmental factor (${matchedEnvironmental.label})`);
+  }
+  if (hasHuman) {
+    parts.push('human factor');
+  }
+
+  return parts.length ? parts.join('; ') : 'undetermined';
+}
+
 function shouldSuppressAlert(alertText) {
   if (!alertText) {
     return false;
@@ -661,6 +772,8 @@ function findKnownAlertMatches(alertText) {
       matchCount: 3,
       reasons: ['description', 'make', 'model'],
       isValid: true
+      ,
+      factorAnalysis: determineFactorAnalysis(device.issue, alertText)
     }));
 }
 
@@ -747,6 +860,8 @@ function screenAlert(criteria) {
       matchCount: reasons.length,
       reasons: [...new Set(reasons)],
       isValid
+      ,
+      factorAnalysis: determineFactorAnalysis(device.issue, alertText)
     };
   });
 
@@ -777,6 +892,7 @@ function buildTable(matches) {
           <td>${escapeHtml(device.description)}</td>
           <td>${escapeHtml(device.manufacturer)}</td>
           <td>${escapeHtml(device.model)}</td>
+          <td>${escapeHtml(device.factorAnalysis)}</td>
           <td>${escapeHtml(device.issue)}</td>
         </tr>
       `;
@@ -794,6 +910,7 @@ function buildTable(matches) {
           <th>Description</th>
           <th>Make</th>
           <th>Model</th>
+          <th>Factor analysis</th>
           <th>Issue</th>
         </tr>
       </thead>
@@ -848,6 +965,7 @@ function buildExcelHtml(matches) {
             <th>Description</th>
             <th>Make</th>
             <th>Model</th>
+            <th>Factor analysis</th>
             <th>Issue</th>
           </tr>
         </thead>
