@@ -588,7 +588,10 @@ function determineFactorAnalysis(issueText, alertText = '') {
     return 'undetermined';
   }
 
-  if (/\bolympus\b/i.test(normalized) && /\buhi[- ]?4\b/i.test(normalized) && /\bhigh flow insufflation\b/i.test(normalized)) {
+  if (
+    (/\bolympus\b/i.test(normalized) && /\buhi[- ]?4\b/i.test(normalized) && /\b(?:high flow )?insufflation\b/i.test(normalized)) ||
+    /RC[- ]?2026[- ]?RN[- ]?00430[- ]?1/i.test(normalized)
+  ) {
     return 'engineering factor: pressure sensor';
   }
 
